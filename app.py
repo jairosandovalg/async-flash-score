@@ -227,11 +227,11 @@ def cumple_criterios_alerta(partido: dict) -> bool:
 
     # CONDICIÓN C: Asedio Ofensivo Alto para Mercado de Goles (Over / Próximo Gol)
     # Total xG alto acumulado y volumen constante de remates pero marcador con pocos goles
-    total_goles = gol_l + gol_v
-    if total_goles <= 2 and (xg_l + xg_v) >= 2.10 and (remates_puerta_l + remates_puerta_v) >= 7:
-        equipo_presionando = "Local" if xg_l > xg_v else "Visitante"
-        partido["Recomendacion"] = f"Próximo Gol / Over Goles adicional (Presión alta de {equipo_presionando})"
-        return True
+    #total_goles = gol_l + gol_v
+    #if total_goles <= 2 and (xg_l + xg_v) >= 2.10 and (remates_puerta_l + remates_puerta_v) >= 7:
+        #equipo_presionando = "Local" if xg_l > xg_v else "Visitante"
+        #partido["Recomendacion"] = f"Próximo Gol / Over Goles adicional (Presión alta de {equipo_presionando})"
+        #return True
 
     return False
 
