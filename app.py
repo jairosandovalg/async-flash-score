@@ -174,9 +174,9 @@ def cumple_criterios_alerta(partido: dict) -> bool:
         return False
 
     # Filtro temporal: Minuto 48 al 78 (Segundo tiempo con volumen estadístico consolidado)
-    minuto = obtener_minuto_int(partido.get("Minuto", ""))
-    if minuto < 48 or minuto > 78:
-        return False
+    #minuto = obtener_minuto_int(partido.get("Minuto", ""))
+    #if minuto < 48 or minuto > 78:
+        #return False
 
     stats = partido.get("Stats", {})
     if not stats:
