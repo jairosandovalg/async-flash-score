@@ -202,28 +202,28 @@ def cumple_criterios_alerta(partido: dict) -> bool:
     cuotas = parsear_cuotas_1x2(partido.get("Cuotas", ""))
 
     # CONDICIÓN A: Empate con Dominio Ofensivo Local y Cuota Rentable (>= 1.90)
-    if gol_l == gol_v and rojas_l == 0:
-        dif_puerta = remates_puerta_l - remates_puerta_v
-        dif_xg = xg_l - xg_v
-        dif_corners = corners_l - corners_v
-        dif_toques = toques_area_l - toques_area_v
+    #if gol_l == gol_v and rojas_l == 0:
+        #dif_puerta = remates_puerta_l - remates_puerta_v
+        #dif_xg = xg_l - xg_v
+        #dif_corners = corners_l - corners_v
+        #dif_toques = toques_area_l - toques_area_v
 
-        if dif_puerta >= 3 and dif_xg >= 0.50 and dif_corners >= 3 and posesion_l >= 58.0 and dif_toques >= 6:
-            if cuotas["1"] >= 1.90:
-                partido["Recomendacion"] = f"Apostar Gana Local (Cuota actual: {cuotas['1']})"
-                return True
+        #if dif_puerta >= 3 and dif_xg >= 0.50 and dif_corners >= 3 and posesion_l >= 58.0 and dif_toques >= 6:
+            #if cuotas["1"] >= 1.90:
+                #partido["Recomendacion"] = f"Apostar Gana Local (Cuota actual: {cuotas['1']})"
+                #return True
 
     # CONDICIÓN B: Empate con Dominio Ofensivo Visitante y Cuota Rentable (>= 1.90)
-    if gol_l == gol_v and rojas_v == 0:
-        dif_puerta = remates_puerta_v - remates_puerta_l
-        dif_xg = xg_v - xg_l
-        dif_corners = corners_v - corners_l
-        dif_toques = toques_area_v - toques_area_l
+    #if gol_l == gol_v and rojas_v == 0:
+        #dif_puerta = remates_puerta_v - remates_puerta_l
+        #dif_xg = xg_v - xg_l
+        #dif_corners = corners_v - corners_l
+        #dif_toques = toques_area_v - toques_area_l
 
-        if dif_puerta >= 3 and dif_xg >= 0.50 and dif_corners >= 3 and posesion_v >= 58.0 and dif_toques >= 6:
-            if cuotas["2"] >= 1.90:
-                partido["Recomendacion"] = f"Apostar Gana Visitante (Cuota actual: {cuotas['2']})"
-                return True
+        #if dif_puerta >= 3 and dif_xg >= 0.50 and dif_corners >= 3 and posesion_v >= 58.0 and dif_toques >= 6:
+            #if cuotas["2"] >= 1.90:
+                #partido["Recomendacion"] = f"Apostar Gana Visitante (Cuota actual: {cuotas['2']})"
+                #return True
 
     # CONDICIÓN C: Asedio Ofensivo Alto para Mercado de Goles (Over / Próximo Gol)
     # Total xG alto acumulado y volumen constante de remates pero marcador con pocos goles
