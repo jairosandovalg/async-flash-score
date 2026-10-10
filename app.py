@@ -11,15 +11,29 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "7272170952")
 CONCURRENCIA_MAXIMA = 3
 
 
-# --- PARSEADORES NUMÉRICOS Y AUXILIARES ---
+# --- PARSEADORES NUMÉRICOS (CONVERSIÓN CONTROLADA) ---
 
-def extraer_numero(val_str: str) -> float:
-    """Extrae el primer número flotante o entero de una cadena de texto."""
-    if not val_str or val_str == "-":
+def a_decimal(val_str: str) -> float:
+    """Limpia y convierte a número flotante manejando comas o puntos."""
+    if not val_str or val_str in ("-", "- - -"):
         return 0.0
-    val_limpio = val_str.replace("%", "").strip()
+    val_limpio = str(val_str).replace("%", "").replace(",", ".").strip()
     match = re.search(r"[-+]?\d*\.?\d+", val_limpio)
-    return float(match.group()) if match else 0.0
+    try:
+        return float(match.group()) if match else 0.0
+    except (ValueError, AttributeError):
+        return 0.0
+
+
+def a_entero(val_str: str) -> int:
+    """Extrae el primer número entero de una cadena."""
+    if not val_str or val_str in ("-", "- - -"):
+        return 0
+    match = re.search(r"\d+", str(val_str))
+    try:
+        return int(match.group()) if match else 0
+    except (ValueError, AttributeError):
+        return 0
 
 
 def parsear_cuotas_1x2(cuotas_str: str) -> dict:
@@ -27,45 +41,46 @@ def parsear_cuotas_1x2(cuotas_str: str) -> dict:
     cuotas = {"1": 0.0, "X": 0.0, "2": 0.0}
     if not cuotas_str or cuotas_str == "- - -":
         return cuotas
-    m = re.findall(r"(?:1|X|2):\s*([0-9\.]+)", cuotas_str)
+    cuotas_limpio = cuotas_str.replace(",", ".")
+    m = re.findall(r"(?:1|X|2):\s*([0-9\.]+)", cuotas_limpio)
     if len(m) == 3:
-        cuotas["1"], cuotas["X"], cuotas["2"] = float(m[0]), float(m[1]), float(m[2])
+        cuotas["1"], cuotas["X"], cuotas["2"] = a_decimal(m[0]), a_decimal(m[1]), a_decimal(m[2])
     return cuotas
 
 
 def parsear_marcador(marcador_str: str) -> tuple[int, int]:
-    """Extrae los goles (local, visitante) del marcador."""
-    nums = re.findall(r"\d+", marcador_str)
+    """Extrae los goles (local: int, visitante: int) limpiando tiempos parciales."""
+    if not marcador_str or marcador_str == "- - -":
+        return -1, -1
+    marcador_limpio = re.sub(r"\(.*?\)", "", marcador_str)
+    nums = re.findall(r"\b\d+\b", marcador_limpio)
     if len(nums) >= 2:
-        return int(nums[0]), int(nums[1])
+        return a_entero(nums[0]), a_entero(nums[1])
     return -1, -1
 
 
-def obtener_minuto_int(minuto_str: str) -> int:
-    """Extrae el minuto en valor entero."""
-    m = re.search(r"\d+", minuto_str)
-    return int(m.group()) if m else 0
-
-
-# --- COMUNICACIÓN TELEGRAM ---
+# --- TELEGRAM ---
 
 async def enviar_alerta_telegram_async(session: aiohttp.ClientSession, mensaje: str) -> bool:
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": mensaje, "parse_mode": "HTML"}
     try:
         async with session.post(url, json=payload, timeout=10) as resp:
+            data = await resp.json()
+            if not data.get("ok"):
+                print(f"[ERROR TG] Respuesta de la API: {data.get('description')}")
             return resp.status == 200
     except Exception as e:
         print(f"Error Telegram: {e}")
         return False
 
 
-# --- EXTRACCIÓN Y FORMATEO ---
+# --- PARSEO DE BLOQUES HTML ---
 
 def parsear_bloque_estadisticas(soup_bloque) -> dict:
     stats = {}
 
-    # 1. Filas métricas estándar (Posesión, xG, Toques en área rival, etc.)
+    # 1. Filas métricas estándar (Posesión, xG, Pases, Faltas, etc.)
     for fila in soup_bloque.select('div[data-testid="wcl-statistics"]'):
         etiqueta_el = fila.select_one(".wcl-label_sO4bA span, [data-testid='wcl-scores-simple-text-01'], .wcl-name_2lXWg")
         if not etiqueta_el:
@@ -119,9 +134,7 @@ def formatear_mensaje_partido(reg: dict) -> str:
         "Remates a puerta",
         "Remates fuera",
         "Córneres",
-        "Tarjetas amarillas",
-        "Tarjetas rojas",
-        "Toques en el área rival"
+        "Tarjetas amarillas"
     ]
     lineas = []
     procesadas = set()
@@ -129,11 +142,10 @@ def formatear_mensaje_partido(reg: dict) -> str:
     for m in metricas_fijas:
         kl = next((k for k in stats if m.lower() in k.lower() and "(L)" in k), None)
         kv = next((k for k in stats if m.lower() in k.lower() and "(V)" in k), None)
-        lineas.append(f"• <b>{m}:</b> {stats.get(kl, '-') if kl else '-'} | {stats.get(kv, '-') if kv else '-'}")
-        if kl:
-            procesadas.add(kl.replace(" (L)", ""))
-        if kv:
-            procesadas.add(kv.replace(" (V)", ""))
+        if kl or kv:
+            lineas.append(f"• <b>{m}:</b> {stats.get(kl, '-') if kl else '-'} | {stats.get(kv, '-') if kv else '-'}")
+            if kl: procesadas.add(kl.replace(" (L)", ""))
+            if kv: procesadas.add(kv.replace(" (V)", ""))
 
     for k, v in stats.items():
         base_name = k.replace(" (L)", "").replace(" (V)", "")
@@ -143,12 +155,12 @@ def formatear_mensaje_partido(reg: dict) -> str:
             lineas.append(f"• <b>{base_name}:</b> {val_l} | {val_v}")
             procesadas.add(base_name)
 
-    stats_texto = "\n\n📊 <b>Estadísticas Principales (L | V):</b>\n" + "\n".join(lineas)
+    stats_texto = ("\n\n📊 <b>Estadísticas Principales (L | V):</b>\n" + "\n".join(lineas)) if lineas else "\n\n📊 <i>Sin estadísticas en directo disponibles</i>"
     recomendacion = reg.get("Recomendacion", "Revisar mercado")
 
     return (
         f"🎯 <b>SEÑAL DE VALOR EN VIVO</b>\n\n"
-        f"💡 <b>Estrategia Sugerida:</b> {recomendacion}\n\n"
+        f"💡 <b>Estrategia:</b> {recomendacion}\n\n"
         f"⚔️ <b>Partido:</b> {reg['Partido en Vivo']}\n"
         f"🔢 <b>Marcador:</b> {reg['Marcador']}\n"
         f"⏱ <b>Minuto:</b> {reg['Minuto']} ({reg['Tiempo/Estado']})\n"
@@ -157,90 +169,53 @@ def formatear_mensaje_partido(reg: dict) -> str:
     )
 
 
-# --- LÓGICA DE FILTROS Y CRITERIOS CUANTITATIVOS ---
+# --- EVALUACIÓN FILTRO POR FILTRO CON CONVERSIÓN PREVIA ---
 
 def cumple_criterios_alerta(partido: dict) -> bool:
+    nombre = partido.get("Partido en Vivo", "Desconocido")
+
+    # FILTRO 1: Estado del partido
     estado = partido.get("Tiempo/Estado", "").upper()
     estados_excluidos = ["FINALIZADO", "FIN", "FT", "APL.", "POSTP.", "DESCANSO", "DESC."]
     if any(ex in estado for ex in estados_excluidos):
+        print(f"[Filtro 1 NO CUMPLE] {nombre} | Estado no jugable: '{estado}'")
         return False
 
-    marcador = partido.get("Marcador", "")
-    if not marcador or marcador == "- - -":
+    # CONVERSIÓN: Minuto a entero
+    minuto_int = a_entero(partido.get("Minuto", ""))
+    # FILTRO 2: Ventana de tiempo (Ejemplo: Minuto >= 1)
+    if minuto_int <= 0:
+        print(f"[Filtro 2 NO CUMPLE] {nombre} | Minuto no detectado o 0: '{partido.get('Minuto')}'")
         return False
 
-    gol_l, gol_v = parsear_marcador(marcador)
-    if gol_l == -1:
+    # CONVERSIÓN: Marcador a enteros
+    marcador_str = partido.get("Marcador", "")
+    gol_l, gol_v = parsear_marcador(marcador_str)
+    if gol_l == -1 or gol_v == -1:
+        print(f"[Filtro 3 NO CUMPLE] {nombre} | Marcador ilegible: '{marcador_str}'")
         return False
 
-    # Filtro temporal: Minuto 48 al 78 (Segundo tiempo con volumen estadístico consolidado)
-    #minuto = obtener_minuto_int(partido.get("Minuto", ""))
-    #if minuto < 48 or minuto > 78:
-        #return False
-
-    stats = partido.get("Stats", {})
-    if not stats:
+    # FILTRO 3: Condición de empate
+    if gol_l != gol_v:
+        print(f"[Filtro 4 NO CUMPLE] {nombre} | No están empatados (L: {gol_l} vs V: {gol_v})")
         return False
 
-    def get_stat(nombre_parcial, lado):
-        k = next((k for k in stats if nombre_parcial.lower() in k.lower() and f"({lado})" in k), None)
-        return extraer_numero(stats.get(k, "0")) if k else 0.0
+    # CONVERSIÓN: Cuotas a float
+    cuotas_dict = parsear_cuotas_1x2(partido.get("Cuotas", ""))
+    cuota_x = cuotas_dict["X"]
 
-    remates_puerta_l = get_stat("puerta", "L")
-    remates_puerta_v = get_stat("puerta", "V")
-    xg_l = get_stat("xg", "L")
-    xg_v = get_stat("xg", "V")
-    corners_l = get_stat("córner", "L")
-    corners_v = get_stat("córner", "V")
-    posesion_l = get_stat("posesión", "L")
-    posesion_v = get_stat("posesión", "V")
-    rojas_l = get_stat("rojas", "L")
-    rojas_v = get_stat("rojas", "V")
-    toques_area_l = get_stat("toques en el área", "L")
-    toques_area_v = get_stat("toques en el área", "V")
+    # FILTRO 4: Cuota de empate mayor a 2.00
+    if cuota_x <= 2.00:
+        print(f"[Filtro 5 NO CUMPLE] {nombre} | Cuota X ({cuota_x}) no es mayor a 2.00 | Cuotas: '{partido.get('Cuotas')}'")
+        return False
 
-    cuotas = parsear_cuotas_1x2(partido.get("Cuotas", ""))
-
-    # CONDICIÓN A: Empate con Dominio Ofensivo Local y Cuota Rentable (>= 1.90)
-    #if gol_l == gol_v and rojas_l == 0:
-        #dif_puerta = remates_puerta_l - remates_puerta_v
-        #dif_xg = xg_l - xg_v
-        #dif_corners = corners_l - corners_v
-        #dif_toques = toques_area_l - toques_area_v
-
-        #if dif_puerta >= 3 and dif_xg >= 0.50 and dif_corners >= 3 and posesion_l >= 58.0 and dif_toques >= 6:
-            #if cuotas["1"] >= 1.90:
-                #partido["Recomendacion"] = f"Apostar Gana Local (Cuota actual: {cuotas['1']})"
-                #return True
-
-    # CONDICIÓN B: Empate con Dominio Ofensivo Visitante y Cuota Rentable (>= 1.90)
-    #if gol_l == gol_v and rojas_v == 0:
-        #dif_puerta = remates_puerta_v - remates_puerta_l
-        #dif_xg = xg_v - xg_l
-        #dif_corners = corners_v - corners_l
-        #dif_toques = toques_area_v - toques_area_l
-
-        #if dif_puerta >= 3 and dif_xg >= 0.50 and dif_corners >= 3 and posesion_v >= 58.0 and dif_toques >= 6:
-            #if cuotas["2"] >= 1.90:
-                #partido["Recomendacion"] = f"Apostar Gana Visitante (Cuota actual: {cuotas['2']})"
-                #return True
-
-    # CONDICIÓN C: Asedio Ofensivo Alto para Mercado de Goles (Over / Próximo Gol)
-    # Total xG alto acumulado y volumen constante de remates pero marcador con pocos goles
-    #total_goles = gol_l + gol_v
-    #if total_goles <= 2 and (xg_l + xg_v) >= 2.10 and (remates_puerta_l + remates_puerta_v) >= 7:
-        #equipo_presionando = "Local" if xg_l > xg_v else "Visitante"
-        #partido["Recomendacion"] = f"Próximo Gol / Over Goles adicional (Presión alta de {equipo_presionando})"
-        #return True
-    # FILTRO: Marcador empatado y cuota de empate mayor a 2.00
-    if gol_l == gol_v and cuotas["X"] > 2.00:
-        partido["Recomendacion"] = f"Empate en vivo (Cuota X: {cuotas['X']})"
-        return True
-
-    return False
+    # Si pasa todos los filtros numéricos:
+    partido["Recomendacion"] = f"Empate en vivo (Cuota X: {cuota_x:.2f} | Minuto: {minuto_int}')"
+    print(f"✅ [CUMPLE TODOS LOS FILTROS] {nombre} -> Marcador: {gol_l}-{gol_v} | Minuto: {minuto_int} | Cuota X: {cuota_x:.2f}")
+    return True
 
 
-# --- NAVEGACIÓN Y EXTRACCIÓN CON PLAYWRIGHT ---
+# --- NAVEGACIÓN Y EXTRACCIÓN ---
 
 async def procesar_partido(context, p_div_data: dict, semaforo: asyncio.Semaphore, tg_session: aiohttp.ClientSession):
     async with semaforo:
@@ -262,12 +237,12 @@ async def procesar_partido(context, p_div_data: dict, semaforo: asyncio.Semaphor
             await page.goto(url_partido, timeout=30000, wait_until="domcontentloaded")
 
             try:
-                await page.wait_for_selector("div.detailScore__wrapper", timeout=6000)
+                await page.wait_for_selector("div.detailScore__wrapper", timeout=5000)
             except Exception:
                 pass
 
             try:
-                await page.wait_for_selector("[data-testid='wcl-oddsValue']", timeout=4000)
+                await page.wait_for_selector("[data-testid='wcl-oddsValue']", timeout=3000)
             except Exception:
                 pass
 
@@ -285,16 +260,9 @@ async def procesar_partido(context, p_div_data: dict, semaforo: asyncio.Semaphor
             if minuto:
                 datos_partido["Minuto"] = minuto.get_text(strip=True)
 
-            # Extraer cuotas 1X2
-            botones = soup_resumen.find_all("button", attrs={"data-analytics-bookmaker-id": "660"})
-            valores_cuotas = []
-            for btn in botones:
-                span = btn.find("span", {"data-testid": "wcl-oddsValue"})
-                if span and span.get_text(strip=True):
-                    valores_cuotas.append(span.get_text(strip=True))
-                if len(valores_cuotas) == 3:
-                    break
-
+            # Selector directo para cuotas sin depender del ID del bookmaker
+            spans_odds = soup_resumen.select("[data-testid='wcl-oddsValue']")
+            valores_cuotas = [s.get_text(strip=True) for s in spans_odds if s.get_text(strip=True)]
             if len(valores_cuotas) >= 3:
                 datos_partido["Cuotas"] = f"1: {valores_cuotas[0]} | X: {valores_cuotas[1]} | 2: {valores_cuotas[2]}"
 
@@ -304,20 +272,20 @@ async def procesar_partido(context, p_div_data: dict, semaforo: asyncio.Semaphor
 
             if await tab_stats.count() > 0 and await tab_stats.is_visible():
                 try:
-                    await tab_stats.click(timeout=3000)
+                    await tab_stats.click(timeout=2500)
                     pudo_clicar = True
                 except Exception:
                     pudo_clicar = False
 
             if not pudo_clicar:
-                await page.goto(url_stats, timeout=20000, wait_until="domcontentloaded")
+                await page.goto(url_stats, timeout=15000, wait_until="domcontentloaded")
 
             # 3. Esperar que los nodos de estadísticas aparezcan en el DOM
             try:
-                await page.wait_for_selector('div[data-testid="statGroup"], div[data-testid="wcl-statistics"]', timeout=7000)
-                await page.wait_for_timeout(800)
+                await page.wait_for_selector('div[data-testid="statGroup"], div[data-testid="wcl-statistics"]', timeout=4000)
+                await page.wait_for_timeout(400)
             except Exception:
-                await page.wait_for_timeout(1500)
+                pass
 
             soup_stats = BeautifulSoup(await page.content(), "html.parser")
             bloque_stats = None
@@ -330,18 +298,19 @@ async def procesar_partido(context, p_div_data: dict, semaforo: asyncio.Semaphor
                     break
 
             if not bloque_stats:
-                bloque_stats = grupos[0] if grupos else soup_stats.select_one('div[data-testid="match-history"]') or soup_stats
+                bloque_stats = grupos[0] if grupos else soup_stats.select_one('div[data-testid="match-history"]')
 
             if bloque_stats:
                 datos_partido["Stats"] = parsear_bloque_estadisticas(bloque_stats)
 
-            # 4. Validar filtros y disparar notificación
+            # 4. Evaluación de filtros y envío de alerta
             if cumple_criterios_alerta(datos_partido):
                 msg = formatear_mensaje_partido(datos_partido)
-                await enviar_alerta_telegram_async(tg_session, msg)
-                print(f"✓ Señal enviada a Telegram: {p_div_data['nombre']}")
-            else:
-                print(f"Descartado por filtros: {p_div_data['nombre']} | Min: {datos_partido['Minuto']} | Marcador: {datos_partido['Marcador']}")
+                enviado = await enviar_alerta_telegram_async(tg_session, msg)
+                if enviado:
+                    print(f"🚀 Señal enviada a Telegram con éxito: {p_div_data['nombre']}")
+                else:
+                    print(f"❌ Falló el envío por HTTP a Telegram para {p_div_data['nombre']}")
 
         except Exception as e:
             print(f"Error procesando {p_div_data['nombre']}: {e}")
