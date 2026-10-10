@@ -232,6 +232,10 @@ def cumple_criterios_alerta(partido: dict) -> bool:
         #equipo_presionando = "Local" if xg_l > xg_v else "Visitante"
         #partido["Recomendacion"] = f"Próximo Gol / Over Goles adicional (Presión alta de {equipo_presionando})"
         #return True
+    # FILTRO: Marcador empatado y cuota de empate mayor a 2.00
+    if gol_l == gol_v and cuotas["X"] > 2.00:
+        partido["Recomendacion"] = f"Empate en vivo (Cuota X: {cuotas['X']})"
+        return True
 
     return False
 
