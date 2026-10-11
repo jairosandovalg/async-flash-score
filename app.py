@@ -8,13 +8,12 @@ from playwright.async_api import async_playwright
 # --- CONFIGURACIÓN ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8923959866:AAES1dc4LAsedUKUsGR4p5D1SkaMt7nKyes")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "7272170952")
-CONCURRENCIA_MAXIMA = 8
+CONCURRENCIA_MAXIMA = 5  # 5 pestañas concurrentes para buen balance de velocidad/estabilidad
 
 
-# --- PARSEADORES NUMÉRICOS (CONVERSIÓN CONTROLADA) ---
+# --- PARSEADORES NUMÉRICOS ---
 
 def a_decimal(val_str: str) -> float:
-    """Limpia y convierte a número flotante manejando comas o puntos."""
     if not val_str or val_str in ("-", "- - -"):
         return 0.0
     val_limpio = str(val_str).replace("%", "").replace(",", ".").strip()
@@ -26,7 +25,6 @@ def a_decimal(val_str: str) -> float:
 
 
 def a_entero(val_str: str) -> int:
-    """Extrae el primer número entero de una cadena."""
     if not val_str or val_str in ("-", "- - -"):
         return 0
     match = re.search(r"\d+", str(val_str))
@@ -37,7 +35,6 @@ def a_entero(val_str: str) -> int:
 
 
 def parsear_cuotas_1x2(cuotas_str: str) -> dict:
-    """Extrae las cuotas {'1': float, 'X': float, '2': float}."""
     cuotas = {"1": 0.0, "X": 0.0, "2": 0.0}
     if not cuotas_str or cuotas_str == "- - -":
         return cuotas
@@ -49,7 +46,6 @@ def parsear_cuotas_1x2(cuotas_str: str) -> dict:
 
 
 def parsear_marcador(marcador_str: str) -> tuple[int, int]:
-    """Extrae los goles (local: int, visitante: int) limpiando tiempos parciales."""
     if not marcador_str or marcador_str == "- - -":
         return -1, -1
     marcador_limpio = re.sub(r"\(.*?\)", "", marcador_str)
@@ -68,19 +64,18 @@ async def enviar_alerta_telegram_async(session: aiohttp.ClientSession, mensaje: 
         async with session.post(url, json=payload, timeout=10) as resp:
             data = await resp.json()
             if not data.get("ok"):
-                print(f"[ERROR TG] Respuesta de la API: {data.get('description')}")
+                print(f"[ERROR TG] Respuesta de Telegram: {data.get('description')}")
             return resp.status == 200
     except Exception as e:
         print(f"Error Telegram: {e}")
         return False
 
 
-# --- PARSEO DE BLOQUES HTML ---
+# --- ESTADÍSTICAS ---
 
 def parsear_bloque_estadisticas(soup_bloque) -> dict:
     stats = {}
 
-    # 1. Filas métricas estándar (Posesión, xG, Pases, Faltas, etc.)
     for fila in soup_bloque.select('div[data-testid="wcl-statistics"]'):
         etiqueta_el = fila.select_one(".wcl-label_sO4bA span, [data-testid='wcl-scores-simple-text-01'], .wcl-name_2lXWg")
         if not etiqueta_el:
@@ -91,7 +86,6 @@ def parsear_bloque_estadisticas(soup_bloque) -> dict:
         stats[f"{nombre} (L)"] = val_l.get_text(strip=True) if val_l else "-"
         stats[f"{nombre} (V)"] = val_v.get_text(strip=True) if val_v else "-"
 
-    # 2. Remates fuera y Remates a puerta
     shot_container = soup_bloque.select_one('[class*="shotOnTargetStats_"]')
     if shot_container:
         for selector in ['[class*="offTargetBar_"]', '[class*="onTargetBar_"]']:
@@ -104,7 +98,6 @@ def parsear_bloque_estadisticas(soup_bloque) -> dict:
                     stats[f"{nombre} (L)"] = vals[0].get_text(strip=True) if len(vals) > 0 else "-"
                     stats[f"{nombre} (V)"] = vals[-1].get_text(strip=True) if len(vals) > 1 else "-"
 
-    # 3. Badges SVG (Córneres, Tarjetas amarillas y rojas)
     for badge in soup_bloque.select('[class*="incidentValueBadge_"]'):
         svg = badge.select_one("svg")
         if not svg:
@@ -156,7 +149,6 @@ def formatear_mensaje_partido(reg: dict) -> str:
             procesadas.add(base_name)
 
     stats_texto = ("\n\n📊 <b>Estadísticas Principales (L | V):</b>\n" + "\n".join(lineas)) if lineas else "\n\n📊 <i>Sin estadísticas en directo disponibles</i>"
-    
     tipo_alerta = reg.get("Tipo_Alerta", "SEÑAL DE VALOR EN VIVO")
     recomendacion = reg.get("Recomendacion", "Revisar mercado")
 
@@ -171,62 +163,45 @@ def formatear_mensaje_partido(reg: dict) -> str:
     )
 
 
-# --- EVALUACIÓN FILTRO POR FILTRO CON CONVERSIÓN PREVIA ---
+# --- EVALUACIÓN DE CRITERIOS ---
 
 def cumple_criterios_alerta(partido: dict) -> bool:
     nombre = partido.get("Partido en Vivo", "Desconocido")
     estado = partido.get("Tiempo/Estado", "").upper()
 
-    # FILTRO 1: Estado jugable (excluir descansos y partidos terminados o suspendidos)
     estados_excluidos = ["FINALIZADO", "FIN", "FT", "APL.", "POSTP.", "DESCANSO", "DESC."]
     if any(ex in estado for ex in estados_excluidos):
-        print(f"[Filtro 1 NO CUMPLE] {nombre} | Estado no jugable: '{estado}'")
+        print(f"[No Cumple] {nombre} | Estado: '{estado}'")
         return False
 
-    # CONVERSIÓN: Minuto a entero
     minuto_int = a_entero(partido.get("Minuto", ""))
-
-    # FILTRO 2: Ventana de tiempo (Minuto >= 40 o en 2T/Prórroga)
     es_ventana_valida = minuto_int >= 40 or any(t in estado for t in ["2T", "2º", "2ND", "PRÓRROGA", "PRORROGA", "ET"])
     if not es_ventana_valida:
-        print(f"[Filtro 2 NO CUMPLE] {nombre} | Minuto inferior a 40 (Min: {minuto_int}', Estado: '{estado}')")
+        print(f"[No Cumple] {nombre} | Minuto < 40 (Min: {minuto_int}', Estado: '{estado}')")
         return False
 
-    # CONVERSIÓN: Marcador a enteros
     marcador_str = partido.get("Marcador", "")
     gol_l, gol_v = parsear_marcador(marcador_str)
     if gol_l == -1 or gol_v == -1:
-        print(f"[Filtro 3 NO CUMPLE] {nombre} | Marcador ilegible: '{marcador_str}'")
+        print(f"[No Cumple] {nombre} | Marcador ilegible: '{marcador_str}'")
         return False
 
-    # CONVERSIÓN: Cuotas a float
+    if gol_l != gol_v:
+        print(f"[No Cumple] {nombre} | No empatados ({gol_l}-{gol_v})")
+        return False
+
     cuotas_dict = parsear_cuotas_1x2(partido.get("Cuotas", ""))
     cuota_x = cuotas_dict["X"]
 
-    # =========================================================================
-    # ESTRATEGIA 1: APOSTAR AL EMPATE (Minuto >= 40, empate y cuota X > 2.00)
-    # =========================================================================
-    if gol_l == gol_v and cuota_x > 2.00:
-        partido["Tipo_Alerta"] = "APOSTAR AL EMPATE"
-        partido["Recomendacion"] = (
-            f"Apostar al Empate (Cuota X: {cuota_x:.2f} | Minuto: {minuto_int}' | Marcador: {gol_l}-{gol_v})"
-        )
-        print(f"✅ [SEÑAL: EMPATE] {nombre} -> {gol_l}-{gol_v} | Min: {minuto_int} | Cuota X: {cuota_x:.2f}")
-        return True
+    if cuota_x <= 2.00:
+        print(f"[No Cumple] {nombre} | Cuota X ({cuota_x}) <= 2.00")
+        return False
 
-    # =========================================================================
-    # FUTURAS ESTRATEGIAS (Espacio preparado para Próximo Gol / Ofensiva):
-    # =========================================================================
-    # stats = partido.get("Stats", {})
-    # tiros_puerta_l = a_entero(stats.get("Remates a puerta (L)", 0))
-    # tiros_puerta_v = a_entero(stats.get("Remates a puerta (V)", 0))
-    #
-    # if gol_l == gol_v and (tiros_puerta_l + tiros_puerta_v >= 8):
-    #     partido["Tipo_Alerta"] = "APOSTAR PRÓXIMO GOL / OFENSIVA"
-    #     partido["Recomendacion"] = "Alta presión ofensiva en empate. Buscar Over o Próximo Gol."
-    #     return True
-
-    return False
+    # Pasa todos los filtros
+    partido["Tipo_Alerta"] = "APOSTAR AL EMPATE"
+    partido["Recomendacion"] = f"Apostar al Empate (Cuota X: {cuota_x:.2f} | Minuto: {minuto_int}' | Marcador: {gol_l}-{gol_v})"
+    print(f"✅ [SEÑAL VÁLIDA: EMPATE] {nombre} -> {gol_l}-{gol_v} | Min: {minuto_int} | Cuota X: {cuota_x:.2f}")
+    return True
 
 
 # --- NAVEGACIÓN Y EXTRACCIÓN ---
@@ -239,29 +214,34 @@ async def procesar_partido(context, p_div_data: dict, semaforo: asyncio.Semaphor
 
         datos_partido = {
             "Partido en Vivo": p_div_data["nombre"],
-            "Marcador": p_div_data.get("marcador_previo", "- - -"),
+            "Marcador": "- - -",
             "Cuotas": "- - -",
-            "Tiempo/Estado": p_div_data.get("estado_previo", "-"),
-            "Minuto": p_div_data.get("minuto_previo", "-"),
+            "Tiempo/Estado": "-",
+            "Minuto": "-",
             "Stats": {}
         }
 
         try:
             page = await context.new_page()
 
-            # Bloqueo de recursos pesados para acelerar la navegación
+            # Solo bloqueamos imágenes y multimedia pesada (NO bloqueamos CSS para no romper React)
             await page.route(
                 "**/*",
                 lambda route: route.abort()
-                if route.request.resource_type in ["image", "stylesheet", "font", "media"]
+                if route.request.resource_type in ["image", "media"]
                 else route.continue_()
             )
 
-            await page.goto(url_partido, timeout=12000, wait_until="domcontentloaded")
+            await page.goto(url_partido, timeout=15000, wait_until="domcontentloaded")
 
-            # Intentar obtener las cuotas
+            # Esperar datos de partido
             try:
-                await page.wait_for_selector("[data-testid='wcl-oddsValue']", timeout=2500)
+                await page.wait_for_selector("div.detailScore__wrapper", timeout=4000)
+            except Exception:
+                pass
+
+            try:
+                await page.wait_for_selector("[data-testid='wcl-oddsValue']", timeout=3500)
             except Exception:
                 pass
 
@@ -284,13 +264,17 @@ async def procesar_partido(context, p_div_data: dict, semaforo: asyncio.Semaphor
             if len(valores_cuotas) >= 3:
                 datos_partido["Cuotas"] = f"1: {valores_cuotas[0]} | X: {valores_cuotas[1]} | 2: {valores_cuotas[2]}"
 
-            # Descartar temprano si la cuota de empate no supera 2.00
-            cuotas_dict = parsear_cuotas_1x2(datos_partido["Cuotas"])
-            if cuotas_dict["X"] <= 2.00:
-                print(f"[DESCARTADO] {p_div_data['nombre']} | Cuota X ({cuotas_dict['X']}) <= 2.00")
+            # Comprobar si cumple con empate y minuto ANTES de cargar estadísticas
+            gol_l, gol_v = parsear_marcador(datos_partido["Marcador"])
+            minuto_int = a_entero(datos_partido["Minuto"])
+            estado_txt = datos_partido["Tiempo/Estado"].upper()
+            es_valido_tiempo = minuto_int >= 40 or any(t in estado_txt for t in ["2T", "2º", "2ND", "PRÓRROGA", "ET"])
+
+            # Si de partida no están empatados o no llega al minuto 40, salimos rápido sin cargar stats
+            if gol_l != gol_v or not es_valido_tiempo:
                 return
 
-            # Cargar sección de estadísticas
+            # Solo si está empatado y en tiempo, vamos por las estadísticas
             tab_stats = page.locator('a[data-analytics-alias="match-statistics"], a:has-text("ESTADÍSTICAS"), button:has-text("ESTADÍSTICAS")').first
             pudo_clicar = False
 
@@ -305,7 +289,7 @@ async def procesar_partido(context, p_div_data: dict, semaforo: asyncio.Semaphor
                 await page.goto(url_stats, timeout=10000, wait_until="domcontentloaded")
 
             try:
-                await page.wait_for_selector('div[data-testid="statGroup"], div[data-testid="wcl-statistics"]', timeout=2500)
+                await page.wait_for_selector('div[data-testid="statGroup"], div[data-testid="wcl-statistics"]', timeout=3000)
             except Exception:
                 pass
 
@@ -325,14 +309,14 @@ async def procesar_partido(context, p_div_data: dict, semaforo: asyncio.Semaphor
             if bloque_stats:
                 datos_partido["Stats"] = parsear_bloque_estadisticas(bloque_stats)
 
-            # Evaluar y disparar alerta
+            # Evaluación final y alerta
             if cumple_criterios_alerta(datos_partido):
                 msg = formatear_mensaje_partido(datos_partido)
                 enviado = await enviar_alerta_telegram_async(tg_session, msg)
                 if enviado:
                     print(f"🚀 Señal enviada a Telegram con éxito: {p_div_data['nombre']}")
                 else:
-                    print(f"❌ Falló el envío por HTTP a Telegram para {p_div_data['nombre']}")
+                    print(f"❌ Falló el envío a Telegram para {p_div_data['nombre']}")
 
         except Exception as e:
             print(f"Error procesando {p_div_data['nombre']}: {e}")
@@ -346,12 +330,7 @@ async def ejecutar_escaneo_async():
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-                "--blink-settings=imagesEnabled=false"
-            ]
+            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
         )
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
@@ -363,7 +342,7 @@ async def ejecutar_escaneo_async():
             btn_live = "//div[contains(@class, 'filters__text') and text()='EN DIRECTO']"
             await main.wait_for_selector(btn_live, timeout=12000)
             await main.locator(btn_live).click()
-            await main.wait_for_timeout(2000)
+            await main.wait_for_timeout(2500)
 
             soup = BeautifulSoup(await main.content(), "html.parser")
             partidos_divs = soup.find_all("div", id=lambda x: x and x.startswith("g_1_"))
@@ -372,56 +351,24 @@ async def ejecutar_escaneo_async():
                 print("No se encontraron partidos en vivo.")
                 return
 
-            candidatos = []
+            partidos_data = []
             for p_div in partidos_divs:
                 id_p = p_div.get('id').split('_')[-1]
                 h = p_div.find("div", class_=lambda c: c and "home" in c.lower() and "participant" in c.lower())
                 a = p_div.find("div", class_=lambda c: c and "away" in c.lower() and "participant" in c.lower())
-
-                score_home = p_div.find("span", class_=lambda c: c and "score--home" in c.lower())
-                score_away = p_div.find("span", class_=lambda c: c and "score--away" in c.lower())
-                stage_el = p_div.find("div", class_=lambda c: c and "stage" in c.lower())
-
-                score_h_txt = score_home.get_text(strip=True) if score_home else ""
-                score_a_txt = score_away.get_text(strip=True) if score_away else ""
-                stage_txt = stage_el.get_text(strip=True) if stage_el else ""
-
-                minuto_val = a_entero(stage_txt)
-                es_2t_o_prorroga = any(t in stage_txt.upper() for t in ["2T", "2º", "2ND", "PRÓRROGA", "PRORROGA", "ET"])
-
-                # Descartar si el marcador es visible y no están empatados
-                if score_h_txt != "" and score_a_txt != "":
-                    if a_entero(score_h_txt) != a_entero(score_a_txt):
-                        continue
-
-                # Descartar si no ha alcanzado el minuto 40 o el segundo tiempo
-                if not (minuto_val >= 40 or es_2t_o_prorroga):
-                    continue
-
-                candidatos.append({
+                partidos_data.append({
                     "id": id_p,
-                    "nombre": f"{h.get_text(strip=True) if h else 'Local'} vs {a.get_text(strip=True) if a else 'Visitante'}",
-                    "marcador_previo": f"{score_h_txt} - {score_a_txt}" if score_h_txt else "- - -",
-                    "minuto_previo": str(minuto_val) if minuto_val > 0 else "-",
-                    "estado_previo": stage_txt
+                    "nombre": f"{h.get_text(strip=True) if h else 'Local'} vs {a.get_text(strip=True) if a else 'Visitante'}"
                 })
 
-            print(f"Total en vivo: {len(partidos_divs)} | Candidatos válidos (>=40' y empate): {len(candidatos)}")
+            print(f"Partidos en vivo detectados: {len(partidos_data)}. Procesando con concurrencia {CONCURRENCIA_MAXIMA}...")
             await main.close()
-
-            if not candidatos:
-                print("Ningún partido cumple las condiciones previas.")
-                return
 
             semaforo = asyncio.Semaphore(CONCURRENCIA_MAXIMA)
             async with aiohttp.ClientSession() as tg_session:
-                tareas = [procesar_partido(context, p_data, semaforo, tg_session) for p_data in candidatos]
+                tareas = [procesar_partido(context, p_data, semaforo, tg_session) for p_data in partidos_data]
                 await asyncio.gather(*tareas)
 
         finally:
             await browser.close()
-            print("Escaneo finalizado.")
-
-
-if __name__ == "__main__":
-    asyncio.run(ejecutar_escaneo_async())
+            print("Escaneo final
