@@ -185,11 +185,17 @@ def cumple_criterios_alerta(partido: dict) -> bool:
     minuto_int = a_entero(partido.get("Minuto", ""))
 
     # FILTRO 2: Segundo tiempo en adelante (Minuto >= 46 o estados de 2T / prórroga)
-    es_segundo_tiempo = minuto_int >= 46 or any(t in estado for t in ["2T", "2º", "2ND", "PRÓRROGA", "PRORROGA", "ET"])
-    if not es_segundo_tiempo:
-        print(f"[Filtro 2 NO CUMPLE] {nombre} | No está en 2T (Min: {minuto_int}', Estado: '{estado}')")
-        return False
+    #es_segundo_tiempo = minuto_int >= 40 or any(t in estado for t in ["2T", "2º", "2ND", "PRÓRROGA", "PRORROGA", "ET"])
+    #if not es_segundo_tiempo:
+        #print(f"[Filtro 2 NO CUMPLE] {nombre} | No está en 2T (Min: {minuto_int}', Estado: '{estado}')")
+        #return False
 
+    # FILTRO 2: Ventana de tiempo (Minuto >= 40 o en 2T/Prórroga)
+    es_ventana_valida = minuto_int >= 40 or any(t in estado for t in ["2T", "2º", "2ND", "PRÓRROGA", "PRORROGA", "ET"])
+    if not es_ventana_valida:
+        print(f"[Filtro 2 NO CUMPLE] {nombre} | Minuto inferior a 40 (Min: {minuto_int}', Estado: '{estado}')")
+        return False
+        
     # CONVERSIÓN: Marcador a enteros
     marcador_str = partido.get("Marcador", "")
     gol_l, gol_v = parsear_marcador(marcador_str)
