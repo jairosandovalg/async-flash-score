@@ -173,9 +173,9 @@ def formatear_mensaje_partido(reg: dict) -> str:
 
 def cumple_criterios_alerta(partido: dict) -> bool:
     nombre = partido.get("Partido en Vivo", "Desconocido")
-
-    # FILTRO 1: Estado del partido
     estado = partido.get("Tiempo/Estado", "").upper()
+
+    # FILTRO 1: Estado jugable (excluir descansos y partidos terminados o suspendidos)
     estados_excluidos = ["FINALIZADO", "FIN", "FT", "APL.", "POSTP.", "DESCANSO", "DESC."]
     if any(ex in estado for ex in estados_excluidos):
         print(f"[Filtro 1 NO CUMPLE] {nombre} | Estado no jugable: '{estado}'")
@@ -183,9 +183,11 @@ def cumple_criterios_alerta(partido: dict) -> bool:
 
     # CONVERSIÓN: Minuto a entero
     minuto_int = a_entero(partido.get("Minuto", ""))
-    # FILTRO 2: Ventana de tiempo (Ejemplo: Minuto >= 1)
-    if minuto_int <= 0:
-        print(f"[Filtro 2 NO CUMPLE] {nombre} | Minuto no detectado o 0: '{partido.get('Minuto')}'")
+
+    # FILTRO 2: Segundo tiempo en adelante (Minuto >= 46 o estados de 2T / prórroga)
+    es_segundo_tiempo = minuto_int >= 46 or any(t in estado for t in ["2T", "2º", "2ND", "PRÓRROGA", "PRORROGA", "ET"])
+    if not es_segundo_tiempo:
+        print(f"[Filtro 2 NO CUMPLE] {nombre} | No está en 2T (Min: {minuto_int}', Estado: '{estado}')")
         return False
 
     # CONVERSIÓN: Marcador a enteros
@@ -195,24 +197,34 @@ def cumple_criterios_alerta(partido: dict) -> bool:
         print(f"[Filtro 3 NO CUMPLE] {nombre} | Marcador ilegible: '{marcador_str}'")
         return False
 
-    # FILTRO 3: Condición de empate
-    if gol_l != gol_v:
-        print(f"[Filtro 4 NO CUMPLE] {nombre} | No están empatados (L: {gol_l} vs V: {gol_v})")
-        return False
-
     # CONVERSIÓN: Cuotas a float
     cuotas_dict = parsear_cuotas_1x2(partido.get("Cuotas", ""))
     cuota_x = cuotas_dict["X"]
 
-    # FILTRO 4: Cuota de empate mayor a 2.00
-    if cuota_x <= 2.00:
-        print(f"[Filtro 5 NO CUMPLE] {nombre} | Cuota X ({cuota_x}) no es mayor a 2.00 | Cuotas: '{partido.get('Cuotas')}'")
-        return False
+    # =========================================================================
+    # ESTRATEGIA 1: APOSTAR AL EMPATE (En 2T, goles iguales y cuota X > 2.00)
+    # =========================================================================
+    if gol_l == gol_v and cuota_x > 2.00:
+        partido["Tipo_Alerta"] = "APOSTAR AL EMPATE"
+        partido["Recomendacion"] = (
+            f"Apostar al Empate (Cuota X: {cuota_x:.2f} | Minuto: {minuto_int}' | Marcador: {gol_l}-{gol_v})"
+        )
+        print(f"✅ [SEÑAL: EMPATE] {nombre} -> {gol_l}-{gol_v} | Min: {minuto_int} | Cuota X: {cuota_x:.2f}")
+        return True
 
-    # Si pasa todos los filtros numéricos:
-    partido["Recomendacion"] = f"Empate en vivo (Cuota X: {cuota_x:.2f} | Minuto: {minuto_int}')"
-    print(f"✅ [CUMPLE TODOS LOS FILTROS] {nombre} -> Marcador: {gol_l}-{gol_v} | Minuto: {minuto_int} | Cuota X: {cuota_x:.2f}")
-    return True
+    # =========================================================================
+    # FUTURAS ESTRATEGIAS (Espacio preparado para Próximo Gol / Ofensiva):
+    # =========================================================================
+    # stats = partido.get("Stats", {})
+    # tiros_puerta_l = a_entero(stats.get("Remates a puerta (L)", 0))
+    # tiros_puerta_v = a_entero(stats.get("Remates a puerta (V)", 0))
+    #
+    # if gol_l == gol_v and (tiros_puerta_l + tiros_puerta_v >= 8):
+    #     partido["Tipo_Alerta"] = "APOSTAR PRÓXIMO GOL / OFENSIVA"
+    #     partido["Recomendacion"] = "Alta presión ofensiva en empate. Buscar Over o Próximo Gol."
+    #     return True
+
+    return False
 
 
 # --- NAVEGACIÓN Y EXTRACCIÓN ---
