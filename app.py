@@ -180,7 +180,9 @@ def cumple_criterios_alerta(partido: dict) -> bool:
 
     marcador_str = partido.get("Marcador", "")
     gol_l, gol_v = parsear_marcador(marcador_str)
-    if gol_l == -1 or gol_v == -1 or gol_l != gol_v:
+    #if gol_l == -1 or gol_v == -1 or gol_l != gol_v:
+        #return False
+    if gol_l != 0 or gol_v != 0:
         return False
 
     cuotas_dict = parsear_cuotas_1x2(partido.get("Cuotas", ""))
@@ -251,9 +253,10 @@ async def procesar_partido(context, p_div_data: dict, semaforo: asyncio.Semaphor
             es_valido_tiempo = minuto_int >= 40 or any(t in estado_txt for t in ["2T", "2º", "2ND", "PRÓRROGA", "ET"])
 
             # Si no está empatado o no llega al min 40, no gastamos recursos en estadísticas
-            if gol_l != gol_v or not es_valido_tiempo:
+            #if gol_l != gol_v or not es_valido_tiempo:
+                #return
+            if (gol_l != 0 or gol_v != 0) or not es_valido_tiempo:
                 return
-
             # Navegación a estadísticas
             tab_stats = page.locator('a[data-analytics-alias="match-statistics"], a:has-text("ESTADÍSTICAS"), button:has-text("ESTADÍSTICAS")').first
             pudo_clicar = False
