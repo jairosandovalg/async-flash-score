@@ -1,9 +1,9 @@
 name: Escaneo Flashscore Async
 
 on:
-  workflow_dispatch: # Botón manual para ejecutar cuando quieras
+  workflow_dispatch:
   schedule:
-    - cron: '*/15 * * * *' # Se ejecuta cada 15 minutos de forma automática
+    - cron: '*/15 * * * *'
 
 jobs:
   scrape:
@@ -27,6 +27,15 @@ jobs:
       - name: Instalar Chromium y dependencias del sistema
         run: |
           playwright install chromium --with-deps
+
+      # --- NUEVO: Conservar el archivo de memoria entre ejecuciones ---
+      - name: Restaurar historial de partidos alertados
+        uses: actions/cache@v4
+        with:
+          path: alertados.txt
+          key: alertados-${{ github.run_id }}
+          restore-keys: |
+            alertados-
 
       - name: Ejecutar script
         env:
