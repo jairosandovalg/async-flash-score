@@ -8,7 +8,31 @@ from playwright.async_api import async_playwright
 # --- CONFIGURACIÓN ---
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8923959866:AAES1dc4LAsedUKUsGR4p5D1SkaMt7nKyes")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "7272170952")
-CONCURRENCIA_MAXIMA = 3  # Ideal para los límites de CPU y RAM de GitHub Actions
+CONCURRENCIA_MAXIMA = 3  # Ideal para límites de CPU y RAM
+ARCHIVO_ALERTADOS = "alertados.txt"
+
+
+# --- PERSISTENCIA / MEMORIA ---
+
+def cargar_alertados() -> set:
+    """Lee los IDs de partidos previamente notificados."""
+    if not os.path.exists(ARCHIVO_ALERTADOS):
+        return set()
+    try:
+        with open(ARCHIVO_ALERTADOS, "r", encoding="utf-8") as f:
+            return {line.strip() for line in f if line.strip()}
+    except Exception as e:
+        print(f"Error al leer {ARCHIVO_ALERTADOS}: {e}")
+        return set()
+
+
+def guardar_alertado(id_partido: str):
+    """Registra un ID de partido notificado en el archivo de texto."""
+    try:
+        with open(ARCHIVO_ALERTADOS, "a", encoding="utf-8") as f:
+            f.write(f"{id_partido}\n")
+    except Exception as e:
+        print(f"Error al guardar {id_partido} en {ARCHIVO_ALERTADOS}: {e}")
 
 
 # --- PARSEADORES NUMÉRICOS ---
@@ -180,8 +204,8 @@ def cumple_criterios_alerta(partido: dict) -> bool:
 
     marcador_str = partido.get("Marcador", "")
     gol_l, gol_v = parsear_marcador(marcador_str)
-    #if gol_l == -1 or gol_v == -1 or gol_l != gol_v:
-        #return False
+    
+    # Condición estricta: Únicamente marcador 0 a 0
     if gol_l != 0 or gol_v != 0:
         return False
 
@@ -191,15 +215,19 @@ def cumple_criterios_alerta(partido: dict) -> bool:
     if cuota_x <= 2.00:
         return False
 
-    partido["Tipo_Alerta"] = "APOSTAR AL EMPATE"
+    partido["Tipo_Alerta"] = "APOSTAR AL EMPATE (0-0)"
     partido["Recomendacion"] = f"Apostar al Empate (Cuota X: {cuota_x:.2f} | Minuto: {minuto_int}' | Marcador: {gol_l}-{gol_v})"
-    print(f"✅ [SEÑAL VÁLIDA: EMPATE] {nombre} -> {gol_l}-{gol_v} | Min: {minuto_int} | Cuota X: {cuota_x:.2f}")
+    print(f"✅ [SEÑAL VÁLIDA: EMPATE 0-0] {nombre} -> {gol_l}-{gol_v} | Min: {minuto_int} | Cuota X: {cuota_x:.2f}")
     return True
 
 
 # --- NAVEGACIÓN Y EXTRACCIÓN ---
 
-async def procesar_partido(context, p_div_data: dict, semaforo: asyncio.Semaphore, tg_session: aiohttp.ClientSession):
+async def procesar_partido(context, p_div_data: dict, semaforo: asyncio.Semaphore, tg_session: aiohttp.ClientSession, ya_alertados: set):
+    # Descarte temprano si ya fue alertado previamente
+    if p_div_data["id"] in ya_alertados:
+        return
+
     async with semaforo:
         url_partido = f"https://www.flashscore.pe/partido/{p_div_data['id']}/"
         url_stats = f"{url_partido}#/resumen-del-partido/estadisticas-del-partido/0"
@@ -252,11 +280,10 @@ async def procesar_partido(context, p_div_data: dict, semaforo: asyncio.Semaphor
             estado_txt = datos_partido["Tiempo/Estado"].upper()
             es_valido_tiempo = minuto_int >= 40 or any(t in estado_txt for t in ["2T", "2º", "2ND", "PRÓRROGA", "ET"])
 
-            # Si no está empatado o no llega al min 40, no gastamos recursos en estadísticas
-            #if gol_l != gol_v or not es_valido_tiempo:
-                #return
+            # Filtro temprano de recursos: si no es 0-0 o no cumple minuto, descartar sin cargar estadísticas
             if (gol_l != 0 or gol_v != 0) or not es_valido_tiempo:
                 return
+
             # Navegación a estadísticas
             tab_stats = page.locator('a[data-analytics-alias="match-statistics"], a:has-text("ESTADÍSTICAS"), button:has-text("ESTADÍSTICAS")').first
             pudo_clicar = False
@@ -296,7 +323,9 @@ async def procesar_partido(context, p_div_data: dict, semaforo: asyncio.Semaphor
                 msg = formatear_mensaje_partido(datos_partido)
                 enviado = await enviar_alerta_telegram_async(tg_session, msg)
                 if enviado:
-                    print(f"🚀 Señal enviada a Telegram con éxito: {p_div_data['nombre']}")
+                    guardar_alertado(p_div_data["id"])
+                    ya_alertados.add(p_div_data["id"])
+                    print(f"🚀 Señal enviada y guardada con éxito: {p_div_data['nombre']}")
                 else:
                     print(f"❌ Falló el envío a Telegram para {p_div_data['nombre']}")
 
@@ -312,6 +341,9 @@ async def procesar_partido(context, p_div_data: dict, semaforo: asyncio.Semaphor
 
 async def ejecutar_escaneo_async():
     print("Iniciando escaneo asíncrono en Flashscore...")
+    ya_alertados = cargar_alertados()
+    print(f"Partidos previamente alertados en memoria: {len(ya_alertados)}")
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
@@ -319,7 +351,7 @@ async def ejecutar_escaneo_async():
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
                 "--disable-dev-shm-usage",
-                "--blink-settings=imagesEnabled=false"  # Desactiva imágenes sin romper rutas
+                "--blink-settings=imagesEnabled=false"  # Desactiva imágenes
             ]
         )
         context = await browser.new_context(
@@ -331,39 +363,4 @@ async def ejecutar_escaneo_async():
             await main.goto("https://www.flashscore.pe/", timeout=35000, wait_until="domcontentloaded")
             btn_live = "//div[contains(@class, 'filters__text') and text()='EN DIRECTO']"
             await main.wait_for_selector(btn_live, timeout=15000)
-            await main.locator(btn_live).click()
-            await main.wait_for_timeout(3000)
-
-            soup = BeautifulSoup(await main.content(), "html.parser")
-            partidos_divs = soup.find_all("div", id=lambda x: x and x.startswith("g_1_"))
-
-            if not partidos_divs:
-                print("No se encontraron partidos en vivo.")
-                return
-
-            partidos_data = []
-            for p_div in partidos_divs:
-                id_p = p_div.get('id').split('_')[-1]
-                h = p_div.find("div", class_=lambda c: c and "home" in c.lower() and "participant" in c.lower())
-                a = p_div.find("div", class_=lambda c: c and "away" in c.lower() and "participant" in c.lower())
-                partidos_data.append({
-                    "id": id_p,
-                    "nombre": f"{h.get_text(strip=True) if h else 'Local'} vs {a.get_text(strip=True) if a else 'Visitante'}"
-                })
-
-            print(f"Partidos en vivo detectados: {len(partidos_data)}. Procesando...")
-            await main.close()
-
-            semaforo = asyncio.Semaphore(CONCURRENCIA_MAXIMA)
-            async with aiohttp.ClientSession() as tg_session:
-                tareas = [procesar_partido(context, p_data, semaforo, tg_session) for p_data in partidos_data]
-                # return_exceptions=True evita que un fallo en un partido aborte el script completo
-                await asyncio.gather(*tareas, return_exceptions=True)
-
-        finally:
-            await browser.close()
-            print("Escaneo finalizado correctamente.")
-
-
-if __name__ == "__main__":
-    asyncio.run(ejecutar_escaneo_async())
+            await main.
