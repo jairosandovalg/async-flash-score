@@ -363,4 +363,41 @@ async def ejecutar_escaneo_async():
             await main.goto("https://www.flashscore.pe/", timeout=35000, wait_until="domcontentloaded")
             btn_live = "//div[contains(@class, 'filters__text') and text()='EN DIRECTO']"
             await main.wait_for_selector(btn_live, timeout=15000)
-            await main.
+            await main.locator(btn_live).click()
+            await main.wait_for_timeout(3000)
+
+            soup = BeautifulSoup(await main.content(), "html.parser")
+            partidos_divs = soup.find_all("div", id=lambda x: x and x.startswith("g_1_"))
+
+            if not partidos_divs:
+                print("No se encontraron partidos en vivo.")
+                return
+
+            partidos_data = []
+            for p_div in partidos_divs:
+                id_p = p_div.get('id').split('_')[-1]
+                h = p_div.find("div", class_=lambda c: c and "home" in c.lower() and "participant" in c.lower())
+                a = p_div.find("div", class_=lambda c: c and "away" in c.lower() and "participant" in c.lower())
+                partidos_data.append({
+                    "id": id_p,
+                    "nombre": f"{h.get_text(strip=True) if h else 'Local'} vs {a.get_text(strip=True) if a else 'Visitante'}"
+                })
+
+            print(f"Partidos en vivo detectados: {len(partidos_data)}. Procesando...")
+            await main.close()
+
+            semaforo = asyncio.Semaphore(CONCURRENCIA_MAXIMA)
+            async with aiohttp.ClientSession() as tg_session:
+                tareas = [
+                    procesar_partido(context, p_data, semaforo, tg_session, ya_alertados)
+                    for p_data in partidos_data
+                ]
+                await asyncio.gather(*tareas, return_exceptions=True)
+
+        finally:
+            await browser.close()
+            print("Escaneo finalizado correctamente.")
+
+
+if __name__ == "__main__":
+    asyncio.run(ejecutar_escaneo_async())
